@@ -1,0 +1,555 @@
+<!doctype html>
+<html>
+<head>
+  <base target="_top">
+  <style>
+    body{ font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin:12px; color:#111; }
+    .top{ display:flex; flex-direction:column; gap:10px; margin-bottom: 12px; }
+    .titleline{ font-size: 12px; color:#333; display:flex; flex-wrap:wrap; gap:12px; align-items:center; }
+    .titleline b{ color:#111; }
+    .row{ display:flex; flex-wrap:wrap; gap:10px; align-items:center; }
+    label{ font-size:12px; display:flex; gap:8px; align-items:center; white-space:nowrap; }
+    select, button{ padding:8px 10px; border-radius:10px; border:1px solid #ddd; background:#fff; font-size:12px; }
+    button{ cursor:pointer; }
+    button:hover{ border-color:#bbb; }
+    .danger{ border-color:#f0b3b3; }
+    .status{ margin-left:auto; font-size:12px; color:#555; min-width:260px; text-align:right; }
+
+    .gridWrap{ width:100%; border:1px solid #e5e5e5; border-radius:14px; padding:10px; box-sizing:border-box; }
+    .grid{ display:grid; gap:6px; width:100%; }
+
+    .cell{
+      aspect-ratio: 1 / 1;
+      width:100%;
+      border-radius:12px;
+      border:1px solid #ddd;
+      cursor:pointer;
+      user-select:none;
+      padding:6px;
+      box-sizing:border-box;
+      display:flex;
+      align-items:stretch;
+      justify-content:stretch;
+      overflow:hidden;
+      position: relative;
+      touch-action: none;
+    }
+    .cellInner{ width:100%; height:100%; display:flex; flex-direction:column; gap:4px; overflow:hidden; }
+    .wellLabel{ font-weight:800; font-size:12px; line-height:1; }
+    .vialKey{ font-size:9px; line-height:1.05; word-break:break-word; overflow:hidden; }
+    .pillStatus{
+      font-size:9px;
+      line-height:1;
+      padding:3px 6px;
+      border-radius:999px;
+      border:1px solid #ddd;
+      background:#fafafa;
+      display:inline-block;
+      align-self:flex-start;
+      max-width:100%;
+      overflow:hidden;
+      text-overflow:ellipsis;
+      white-space:nowrap;
+    }
+
+    .empty{ background:#f3fff6; }
+    .occupied{ background:#fff3f3; }
+    .selectedRow{ outline:3px solid #2b6cff; border-color:#2b6cff; background:#eef4ff; }
+    .multiSelected{ outline: 3px solid #111; border-color:#111; }
+    .cell:hover{ outline:2px solid #999; }
+
+    .hint{ margin-top:10px; color:#666; font-size:12px; line-height:1.35; display:flex; flex-direction:column; gap:4px; }
+    .mode{ font-weight:700; }
+
+    @media print{
+      .top, .hint { display:none !important; }
+      body { margin:0; }
+      .gridWrap { border:none; padding:0; }
+      .cell { border:1px solid #999; }
+    }
+  </style>
+</head>
+
+<body>
+  <div class="top">
+    <div class="titleline">
+      <span>Mode: <b id="modeLabel"></b></span>
+      <span>Box: <b id="boxLabel"></b></span>
+      <span>Type: <b id="boxType"></b></span>
+      <span>Selected row’s pos: <b id="selPos">(none)</b></span>
+      <span>Selected wells: <b id="batchCount">0</b></span>
+    </div>
+
+    <div class="row">
+      <label>
+        Box:
+        <select id="boxSelect" onchange="onBoxChange()"></select>
+      </label>
+      <button onclick="openSelectedBox()">Open</button>
+
+      <label>
+        Unplaced vial:
+        <select id="vialSelect"></select>
+      </label>
+
+      <button onclick="refreshAll()">Refresh</button>
+
+      <button class="danger" onclick="toggleMoveMode()" id="moveBtn">Move: OFF</button>
+      <button class="danger" onclick="toggleClearMode()" id="clearBtn">Clear: OFF</button>
+
+      <label>
+        Status:
+        <select id="statusSelect">
+          <option value="Checked-out">Checked-out</option>
+          <option value="Used-up">Used-up</option>
+          <option value="Available">Available</option>
+          <option value="Pending finalization">Pending finalization</option>
+        </select>
+      </label>
+      <button class="danger" onclick="applyStatusToSelected()">Apply to Selected</button>
+
+      <button onclick="clearSelection()">Clear Selection</button>
+      <button class="danger" onclick="compactBox()">Compact</button>
+      <button onclick="printGrid()">Print</button>
+
+      <div class="status" id="status"></div>
+    </div>
+  </div>
+
+  <div class="gridWrap">
+    <div class="grid" id="grid"></div>
+  </div>
+
+  <div class="hint">
+    <div><span class="mode">Browser</span>: choose a box → click <b>Open</b>.</div>
+    <div><span class="mode">Selection</span>: click occupied wells to toggle select/unselect. Drag to paint selection.</div>
+    <div>To place: choose a vial in the dropdown → click an empty well.</div>
+    <div>Move/Clear are only active when their toggle is ON.</div>
+    <div>Auto-refresh: every 2 seconds when idle.</div>
+  </div>
+
+<script>
+  // injected by server template
+  let MODE = "<?= (typeof mode === 'undefined') ? 'browser' : mode ?>";
+
+  let CURRENT_BOXUID = "<?= (typeof boxUid === 'undefined') ? '' : boxUid ?>";
+  let CURRENT_BOXID_LABEL = "<?= (typeof boxId === 'undefined') ? '' : boxId ?>";
+  let CURRENT_BOXTYPE = "<?= (typeof boxType === 'undefined') ? '' : boxType ?>";
+  let SELECTED_POS = "<?= (typeof selectedPos === 'undefined') ? '' : selectedPos ?>";
+  let SELECTED_VIALKEY = "<?= (typeof selectedVialKey === 'undefined') ? '' : selectedVialKey ?>";
+
+  let MOVE_MODE = false;
+  let CLEAR_MODE = false;
+  let moveSource = null;
+
+  let dragSelecting = false;
+  let dragAction = 'add';
+
+  let CURRENT_CELLS = [];
+  let BOX_LIST = [];
+  const selectedWells = new Set();
+  let autoRefreshTimer = null;
+
+  function setStatus(msg){ document.getElementById('status').textContent = msg || ''; }
+
+  function paintHeader(){
+    document.getElementById('modeLabel').textContent = MODE;
+    document.getElementById('boxLabel').textContent = CURRENT_BOXID_LABEL || '(none selected)';
+    document.getElementById('boxType').textContent = CURRENT_BOXTYPE || '(unknown)';
+    document.getElementById('selPos').textContent = SELECTED_POS || '(none)';
+    document.getElementById('batchCount').textContent = String(selectedWells.size);
+  }
+
+  function setGridColumnsFromType(){
+    const grid = document.getElementById('grid');
+    const cols = (CURRENT_BOXTYPE === '9x12' || CURRENT_BOXTYPE === '8x12') ? 12 : 9;
+    grid.style.gridTemplateColumns = `repeat(${cols}, minmax(0, 1fr))`;
+  }
+
+  function populateBoxDropdown(){
+    const sel = document.getElementById('boxSelect');
+    sel.innerHTML = '';
+    const empty = document.createElement('option');
+    empty.value = '';
+    empty.textContent = '-- select a box --';
+    sel.appendChild(empty);
+
+    for (const b of BOX_LIST){
+      const opt = document.createElement('option');
+      opt.value = b.boxUid; // IMPORTANT: BOX_UID is the value
+      opt.textContent = `${b.boxId} (${b.boxType})`;
+      sel.appendChild(opt);
+    }
+    sel.value = CURRENT_BOXUID || '';
+  }
+
+  function onBoxChange(){
+    // do not auto-open; only reflect selection
+    const sel = document.getElementById('boxSelect');
+    const boxUid = sel.value;
+    const found = BOX_LIST.find(x => x.boxUid === boxUid);
+    CURRENT_BOXUID = boxUid || '';
+    CURRENT_BOXID_LABEL = found ? found.boxId : '';
+    CURRENT_BOXTYPE = found ? found.boxType : '';
+    paintHeader();
+  }
+
+  function openSelectedBox(){
+    const sel = document.getElementById('boxSelect');
+    const boxUid = sel.value;
+    if (!boxUid) { alert('Select a box first.'); return; }
+    loadBox(boxUid);
+  }
+
+  function loadBox(boxUid){
+    MODE = 'grid';
+    CURRENT_BOXUID = boxUid;
+
+    const found = BOX_LIST.find(x => x.boxUid === boxUid);
+    CURRENT_BOXID_LABEL = found ? found.boxId : '';
+    CURRENT_BOXTYPE = found ? found.boxType : '';
+
+    // Reset interaction modes
+    MOVE_MODE = false; CLEAR_MODE = false; moveSource = null;
+    document.getElementById('moveBtn').textContent = 'Move: OFF';
+    document.getElementById('clearBtn').textContent = 'Clear: OFF';
+
+    clearSelection();
+    paintHeader();
+    setGridColumnsFromType();
+    refreshAll();
+  }
+
+  function printGrid(){ window.print(); }
+
+  function toggleMoveMode(){
+    MOVE_MODE = !MOVE_MODE;
+    if (!MOVE_MODE) moveSource = null;
+    document.getElementById('moveBtn').textContent = `Move: ${MOVE_MODE ? 'ON' : 'OFF'}`;
+    if (MOVE_MODE) {
+      CLEAR_MODE = false;
+      document.getElementById('clearBtn').textContent = 'Clear: OFF';
+      setStatus('Move mode: click occupied source, then empty target.');
+    } else setStatus('');
+  }
+
+  function toggleClearMode(){
+    CLEAR_MODE = !CLEAR_MODE;
+    document.getElementById('clearBtn').textContent = `Clear: ${CLEAR_MODE ? 'ON' : 'OFF'}`;
+    if (CLEAR_MODE) {
+      MOVE_MODE = false; moveSource = null;
+      document.getElementById('moveBtn').textContent = 'Move: OFF';
+      setStatus('Clear mode: click occupied well to clear.');
+    } else setStatus('');
+  }
+
+  function clearSelection(){
+    selectedWells.clear();
+    paintHeader();
+    renderGrid(CURRENT_CELLS);
+  }
+
+  function refreshAll(){
+    paintHeader();
+
+    if (!CURRENT_BOXUID){
+      setStatus('Pick a box and click Open.');
+      document.getElementById('grid').innerHTML = '';
+      return;
+    }
+
+    setStatus('Loading grid...');
+    google.script.run
+      .withSuccessHandler(state => {
+        CURRENT_BOXTYPE = state.boxType || CURRENT_BOXTYPE;
+        CURRENT_BOXID_LABEL = state.boxId || CURRENT_BOXID_LABEL;
+        CURRENT_CELLS = state.cells || [];
+        setGridColumnsFromType();
+        renderGrid(CURRENT_CELLS);
+        paintHeader();
+        setStatus('');
+      })
+      .withFailureHandler(err => setStatus('Error: ' + (err && err.message ? err.message : String(err))))
+      .apiGetGridState(CURRENT_BOXUID);
+
+    google.script.run
+      .withSuccessHandler(vials => renderDropdown(vials))
+      .withFailureHandler(err => setStatus('Error: ' + (err && err.message ? err.message : String(err))))
+      .apiListUnplacedVials(CURRENT_BOXUID);
+  }
+
+  function renderDropdown(vials){
+    const sel = document.getElementById('vialSelect');
+    sel.innerHTML = '';
+
+    if (!CURRENT_BOXUID){
+      const opt = document.createElement('option');
+      opt.value = '';
+      opt.textContent = '(select a box first)';
+      sel.appendChild(opt);
+      return;
+    }
+
+    if (!vials || vials.length === 0){
+      const opt = document.createElement('option');
+      opt.value = '';
+      opt.textContent = '(no unplaced vials in this box)';
+      sel.appendChild(opt);
+      return;
+    }
+
+    for (const v of vials){
+      const opt = document.createElement('option');
+      opt.value = v;
+      opt.textContent = v;
+      sel.appendChild(opt);
+    }
+
+    // If server injected a vialKey, try preselect it once
+    if (SELECTED_VIALKEY) {
+      const match = Array.from(sel.options).find(o => o.value === SELECTED_VIALKEY);
+      if (match) sel.value = SELECTED_VIALKEY;
+      SELECTED_VIALKEY = ''; // only once
+    }
+  }
+
+  function renderGrid(cells){
+    const grid = document.getElementById('grid');
+    grid.innerHTML = '';
+    if (!CURRENT_BOXUID) return;
+
+    const selPos = (SELECTED_POS || '').toUpperCase().trim();
+
+    for (const cell of cells){
+      const div = document.createElement('div');
+      const isRowSelected = selPos && cell.label === selPos;
+      const isMultiSel = selectedWells.has(cell.label);
+
+      div.className =
+        'cell ' +
+        (cell.occupied ? 'occupied' : 'empty') +
+        (isRowSelected ? ' selectedRow' : '') +
+        (isMultiSel ? ' multiSelected' : '');
+
+      div.title = cell.occupied
+        ? `${cell.vialKey}\nStatus: ${cell.status || '(blank)'}`
+        : cell.label;
+
+      div.innerHTML = cell.occupied
+        ? `<div class="cellInner">
+             <div class="wellLabel">${cell.label}</div>
+             <div class="pillStatus">${escapeHtml(cell.status || '')}</div>
+             <div class="vialKey">${escapeHtml(cell.vialKey || '')}</div>
+           </div>`
+        : `<div class="cellInner"><div class="wellLabel">${cell.label}</div></div>`;
+
+      div.addEventListener('pointerdown', (ev) => onCellPointerDown(ev, cell));
+      div.addEventListener('pointerenter', (ev) => onCellPointerEnter(ev, cell));
+      div.addEventListener('pointerup', () => { dragSelecting = false; });
+      div.addEventListener('pointercancel', () => { dragSelecting = false; });
+
+      grid.appendChild(div);
+    }
+  }
+
+  document.addEventListener('pointerup', () => { dragSelecting = false; });
+  document.addEventListener('pointercancel', () => { dragSelecting = false; });
+
+  function onCellPointerDown(ev, cell) {
+    if (!CURRENT_BOXUID) return;
+
+    if (CLEAR_MODE) return onCellClick_Clear(cell);
+    if (MOVE_MODE) return onCellClick_Move(cell);
+
+    if (!cell.occupied) return onCellClick_Place(cell);
+
+    ev.preventDefault();
+    dragSelecting = true;
+
+    const already = selectedWells.has(cell.label);
+    dragAction = already ? 'remove' : 'add';
+    applySelection_(cell.label, dragAction);
+
+    paintHeader();
+    renderGrid(CURRENT_CELLS);
+  }
+
+  function onCellPointerEnter(ev, cell) {
+    if (!dragSelecting) return;
+    if (!cell.occupied) return;
+    applySelection_(cell.label, dragAction);
+    paintHeader();
+    renderGrid(CURRENT_CELLS);
+  }
+
+  function applySelection_(label, action) {
+    if (action === 'add') selectedWells.add(label);
+    else selectedWells.delete(label);
+  }
+
+  function onCellClick_Place(cell){
+    const vialKey = document.getElementById('vialSelect').value;
+    if (!vialKey){ alert('No unplaced vial selected.'); return; }
+    if (cell.occupied) return;
+
+    optimisticSet(cell.label, true, vialKey, 'Pending finalization');
+    setStatus(`Placing ${vialKey} → ${cell.label}...`);
+
+    google.script.run
+      .withSuccessHandler(() => { setStatus(''); refreshAll(); })
+      .withFailureHandler(err => { setStatus('Error: ' + (err && err.message ? err.message : String(err))); refreshAll(); })
+      .apiPlaceVial(CURRENT_BOXUID, vialKey, cell.label);
+  }
+
+  function onCellClick_Clear(cell){
+    if (!cell.occupied) return;
+    if (!confirm(`Clear ${cell.label}?`)) return;
+
+    optimisticSet(cell.label, false, '', '');
+    setStatus(`Clearing ${cell.label}...`);
+
+    google.script.run
+      .withSuccessHandler(() => { setStatus(''); refreshAll(); })
+      .withFailureHandler(err => { setStatus('Error: ' + (err && err.message ? err.message : String(err))); refreshAll(); })
+      .apiClearWell(CURRENT_BOXUID, cell.label);
+  }
+
+  function onCellClick_Move(cell){
+    if (!moveSource) {
+      if (!cell.occupied) return;
+      moveSource = cell.label;
+      setStatus(`Move source: ${moveSource}. Click an empty target.`);
+      return;
+    } else {
+      if (cell.occupied) return;
+      const from = moveSource;
+      const to = cell.label;
+      moveSource = null;
+
+      const src = CURRENT_CELLS.find(x => x.label === from);
+      const vial = src ? src.vialKey : '';
+      const st = src ? (src.status || '') : '';
+
+      optimisticSet(from, false, '', '');
+      optimisticSet(to, true, vial, st);
+
+      setStatus(`Moving ${from} → ${to}...`);
+      google.script.run
+        .withSuccessHandler(() => { setStatus(''); refreshAll(); })
+        .withFailureHandler(err => { setStatus('Error: ' + (err && err.message ? err.message : String(err))); refreshAll(); })
+        .apiMoveVial(CURRENT_BOXUID, from, to);
+    }
+  }
+
+  function applyStatusToSelected(){
+    if (selectedWells.size === 0) { alert('No wells selected.'); return; }
+    const newStatus = document.getElementById('statusSelect').value;
+    if (!confirm(`Apply status "${newStatus}" to ${selectedWells.size} selected wells?`)) return;
+
+    const positions = Array.from(selectedWells);
+
+    // optimistic UI
+    for (const pos of positions) {
+      const cell = CURRENT_CELLS.find(c => c.label === pos);
+      if (!cell || !cell.occupied) continue;
+
+      if (newStatus === "Used-up") {
+        optimisticSet(pos, false, '', '');
+        selectedWells.delete(pos);
+      } else {
+        cell.status = newStatus;
+      }
+    }
+    renderGrid(CURRENT_CELLS);
+    paintHeader();
+
+    setStatus(`Updating ${positions.length} wells...`);
+    google.script.run
+      .withSuccessHandler(res => { setStatus(`Updated ${res.updated} well(s).`); refreshAll(); })
+      .withFailureHandler(err => { setStatus('Error: ' + (err && err.message ? err.message : String(err))); refreshAll(); })
+      .apiBatchSetStatus(CURRENT_BOXUID, positions, newStatus);
+  }
+
+  function compactBox(){
+    if (!confirm(`Compact (stable) all vials in ${CURRENT_BOXID_LABEL}? This will move multiple vials.`)) return;
+    setStatus('Compacting...');
+    google.script.run
+      .withSuccessHandler(res => { setStatus(`Compacted. Moved ${res.moved} vial(s).`); refreshAll(); })
+      .withFailureHandler(err => { setStatus('Error: ' + (err && err.message ? err.message : String(err))); refreshAll(); })
+      .apiCompactBox(CURRENT_BOXUID);
+  }
+
+  function optimisticSet(label, occupied, vialKey, status){
+    for (const c of CURRENT_CELLS){
+      if (c.label === label){
+        c.occupied = occupied;
+        c.vialKey = occupied ? vialKey : '';
+        c.status = occupied ? (status || c.status || '') : '';
+      }
+    }
+    renderGrid(CURRENT_CELLS);
+  }
+
+  function escapeHtml(s){
+    return String(s).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m]));
+  }
+
+  function startAutoRefreshOnce_(){
+    if (autoRefreshTimer) return;
+    autoRefreshTimer = setInterval(() => {
+      if (MODE !== 'grid') return;
+      if (!CURRENT_BOXUID) return;
+      if (MOVE_MODE || CLEAR_MODE || dragSelecting) return;
+      refreshAll();
+    }, 2000);
+  }
+
+  function init(){
+    paintHeader();
+    setStatus('Loading boxes...');
+
+    google.script.run
+      .withSuccessHandler(list => {
+        BOX_LIST = list || [];
+        if (!BOX_LIST.length){
+          setStatus('No HUMAN sample boxes found (or you are not allowed).');
+          populateBoxDropdown();
+          return;
+        }
+
+        // If server injected a valid boxUid -> auto-open it (no manual dropdown selection)
+        const injectedIsValid = CURRENT_BOXUID && BOX_LIST.find(x => x.boxUid === CURRENT_BOXUID);
+
+        if (!injectedIsValid) {
+          CURRENT_BOXUID = '';
+          CURRENT_BOXID_LABEL = '';
+          CURRENT_BOXTYPE = '';
+          MODE = 'browser';
+        } else {
+          const found = BOX_LIST.find(x => x.boxUid === CURRENT_BOXUID);
+          CURRENT_BOXID_LABEL = found ? found.boxId : CURRENT_BOXID_LABEL;
+          CURRENT_BOXTYPE = found ? found.boxType : CURRENT_BOXTYPE;
+          MODE = 'grid';
+        }
+
+        populateBoxDropdown();
+        setStatus('');
+
+        if (CURRENT_BOXUID) {
+          // Force load this box now
+          loadBox(CURRENT_BOXUID);
+        } else {
+          refreshAll();
+        }
+
+        startAutoRefreshOnce_();
+      })
+      .withFailureHandler(err => setStatus('Error: ' + (err && err.message ? err.message : String(err))))
+      .apiListBoxes();
+  }
+
+  init();
+</script>
+
+</body>
+</html>
