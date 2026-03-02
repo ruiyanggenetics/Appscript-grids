@@ -1,0 +1,384 @@
+<!doctype html>
+<html>
+<head>
+  <base target="_top">
+  <style>
+    body{ font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin:12px; color:#111; }
+    .top{ display:flex; flex-direction:column; gap:10px; margin-bottom: 12px; }
+    .titleline{ font-size: 12px; color:#333; display:flex; flex-wrap:wrap; gap:12px; align-items:center; }
+    .titleline b{ color:#111; }
+    .row{ display:flex; flex-wrap:wrap; gap:10px; align-items:center; }
+    label{ font-size:12px; display:flex; gap:8px; align-items:center; white-space:nowrap; }
+    select, button{ padding:8px 10px; border-radius:10px; border:1px solid #ddd; background:#fff; font-size:12px; }
+    button{ cursor:pointer; }
+    button:hover{ border-color:#bbb; }
+    .danger{ border-color:#f0b3b3; }
+    .status{ margin-left:auto; font-size:12px; color:#555; min-width:260px; text-align:right; }
+
+    .gridWrap{ width:100%; border:1px solid #e5e5e5; border-radius:14px; padding:10px; box-sizing:border-box; }
+    .grid{ display:grid; gap:6px; width:100%; }
+
+    .cell{
+      aspect-ratio: 1 / 1; width:100%; border-radius:12px; border:1px solid #ddd;
+      cursor:pointer; user-select:none; padding:6px; box-sizing:border-box;
+      display:flex; align-items:stretch; justify-content:stretch; overflow:hidden;
+      position: relative; touch-action:none;
+    }
+    .cellInner{ width:100%; height:100%; display:flex; flex-direction:column; gap:4px; overflow:hidden; }
+    .wellLabel{ font-weight:800; font-size:12px; line-height:1; }
+    .smallLabel{ font-size:9px; line-height:1.05; word-break:break-word; overflow:hidden; }
+
+    .empty{ background:#f3fff6; }
+    .occupied{ background:#fff3f3; }
+    .multiSelected{ outline: 3px solid #111; border-color:#111; }
+    .cell:hover{ outline:2px solid #999; }
+
+    @media print{
+      .top { display:none !important; }
+      body { margin:0; }
+      .gridWrap { border:none; padding:0; }
+      .cell { border:1px solid #999; }
+    }
+  </style>
+</head>
+
+<body>
+  <div class="top">
+    <div class="titleline">
+      <span>Mode: <b id="modeLabel"></b></span>
+      <span>Box: <b id="boxLabel"></b></span>
+      <span>Type: <b id="boxType"></b></span>
+      <span>Selected wells: <b id="batchCount">0</b></span>
+    </div>
+
+    <div class="row">
+      <label>Box:
+        <select id="boxSelect" onchange="onBoxChange()"></select>
+      </label>
+      <button onclick="openSelectedBox()">Open</button>
+
+      <label>Unplaced cell line:
+        <select id="itemSelect"></select>
+      </label>
+
+      <button onclick="refreshAll()">Refresh</button>
+
+      <button class="danger" onclick="toggleMoveMode()" id="moveBtn">Move: OFF</button>
+
+      <button class="danger" onclick="toggleDeleteMode()" id="delBtn">Delete: OFF</button>
+      <button class="danger" onclick="deleteSelected()">Delete Selected</button>
+
+      <button onclick="clearSelection()">Clear Selection</button>
+      <button onclick="printGrid()">Print</button>
+
+      <div class="status" id="status"></div>
+    </div>
+  </div>
+
+  <div class="gridWrap">
+    <div class="grid" id="grid"></div>
+  </div>
+
+<script>
+  let MODE = "<?= (typeof mode === 'undefined') ? 'grid' : mode ?>";
+  let CURRENT_BOXUID = "<?= (typeof boxUid === 'undefined') ? '' : boxUid ?>";
+  let CURRENT_BOXID_LABEL = "<?= (typeof boxId === 'undefined') ? '' : boxId ?>";
+  let CURRENT_BOXTYPE = "<?= (typeof boxType === 'undefined') ? '' : boxType ?>";
+
+  let MOVE_MODE = false;
+  let DELETE_MODE = false;
+  let moveSource = null;
+
+  let dragSelecting = false;
+  let dragAction = 'add';
+
+  let CURRENT_CELLS = [];
+  let BOX_LIST = [];
+  const selectedWells = new Set();
+  let autoRefreshTimer = null;
+
+  function setStatus(msg){ document.getElementById('status').textContent = msg || ''; }
+
+  function paintHeader(){
+    document.getElementById('modeLabel').textContent = MODE;
+    document.getElementById('boxLabel').textContent = CURRENT_BOXID_LABEL || '(none selected)';
+    document.getElementById('boxType').textContent = CURRENT_BOXTYPE || '(unknown)';
+    document.getElementById('batchCount').textContent = String(selectedWells.size);
+  }
+
+  function setGridColumnsFromType(){
+    const grid = document.getElementById('grid');
+    const cols = (CURRENT_BOXTYPE === '9x12' || CURRENT_BOXTYPE === '8x12') ? 12 : 9;
+    grid.style.gridTemplateColumns = `repeat(${cols}, minmax(0, 1fr))`;
+  }
+
+  function populateBoxDropdown(){
+    const sel = document.getElementById('boxSelect');
+    sel.innerHTML = '';
+    const empty = document.createElement('option');
+    empty.value = '';
+    empty.textContent = '-- select a box --';
+    sel.appendChild(empty);
+
+    for (const b of BOX_LIST){
+      const opt = document.createElement('option');
+      opt.value = b.boxUid;
+      opt.textContent = `${b.boxId} (${b.boxType})`;
+      sel.appendChild(opt);
+    }
+    sel.value = CURRENT_BOXUID || '';
+  }
+
+  function onBoxChange(){ paintHeader(); }
+
+  function openSelectedBox(){
+    const boxUid = document.getElementById('boxSelect').value;
+    if (!boxUid) { alert('Select a box first.'); return; }
+    loadBox(boxUid);
+  }
+
+  function loadBox(boxUid){
+    MODE = 'grid';
+    CURRENT_BOXUID = boxUid;
+
+    const found = BOX_LIST.find(x => x.boxUid === boxUid);
+    CURRENT_BOXID_LABEL = found ? found.boxId : '';
+    CURRENT_BOXTYPE = found ? found.boxType : '';
+
+    MOVE_MODE = false; DELETE_MODE = false; moveSource = null;
+    document.getElementById('moveBtn').textContent = 'Move: OFF';
+    document.getElementById('delBtn').textContent = 'Delete: OFF';
+
+    clearSelection();
+    setGridColumnsFromType();
+    refreshAll();
+  }
+
+  function toggleMoveMode(){
+    MOVE_MODE = !MOVE_MODE;
+    if (!MOVE_MODE) moveSource = null;
+    document.getElementById('moveBtn').textContent = `Move: ${MOVE_MODE ? 'ON' : 'OFF'}`;
+    if (MOVE_MODE){
+      DELETE_MODE = false;
+      document.getElementById('delBtn').textContent = 'Delete: OFF';
+      setStatus('Move: click occupied source, then empty target.');
+    } else setStatus('');
+  }
+
+  function toggleDeleteMode(){
+    DELETE_MODE = !DELETE_MODE;
+    document.getElementById('delBtn').textContent = `Delete: ${DELETE_MODE ? 'ON' : 'OFF'}`;
+    if (DELETE_MODE){
+      MOVE_MODE = false;
+      moveSource = null;
+      document.getElementById('moveBtn').textContent = 'Move: OFF';
+      setStatus('Delete: click occupied wells to select, then Delete Selected.');
+    } else setStatus('');
+  }
+
+  function clearSelection(){ selectedWells.clear(); paintHeader(); renderGrid(CURRENT_CELLS); }
+  function printGrid(){ window.print(); }
+
+  function refreshAll(){
+    paintHeader();
+    if (!CURRENT_BOXUID){
+      setStatus('Pick a box and click Open.');
+      document.getElementById('grid').innerHTML = '';
+      return;
+    }
+
+    google.script.run
+      .withSuccessHandler(state => {
+        CURRENT_BOXTYPE = state.boxType || CURRENT_BOXTYPE;
+        CURRENT_BOXID_LABEL = state.boxId || CURRENT_BOXID_LABEL;
+        CURRENT_CELLS = state.cells || [];
+        setGridColumnsFromType();
+        renderGrid(CURRENT_CELLS);
+        paintHeader();
+        setStatus('');
+      })
+      .withFailureHandler(err => setStatus('Error: ' + (err?.message || err)))
+      .apiGetGridState(CURRENT_BOXUID);
+
+    google.script.run
+      .withSuccessHandler(items => renderDropdown(items))
+      .withFailureHandler(err => setStatus('Error: ' + (err?.message || err)))
+      .apiListUnplacedItems(CURRENT_BOXUID);
+  }
+
+  function renderDropdown(items){
+    const sel = document.getElementById('itemSelect');
+    sel.innerHTML = '';
+    if (!items || items.length === 0){
+      const opt = document.createElement('option');
+      opt.value = '';
+      opt.textContent = '(no unplaced items)';
+      sel.appendChild(opt);
+      return;
+    }
+    for (const it of items){
+      const opt = document.createElement('option');
+      opt.value = it.key;
+      opt.textContent = it.label;
+      sel.appendChild(opt);
+    }
+  }
+
+  function renderGrid(cells){
+    const grid = document.getElementById('grid');
+    grid.innerHTML = '';
+    if (!CURRENT_BOXUID) return;
+
+    for (const cell of cells){
+      const div = document.createElement('div');
+      const isMultiSel = selectedWells.has(cell.label);
+
+      div.className = 'cell ' + (cell.occupied ? 'occupied' : 'empty') + (isMultiSel ? ' multiSelected' : '');
+      div.title = cell.occupied ? (cell.labelText || '') : cell.label;
+
+      div.innerHTML = cell.occupied
+        ? `<div class="cellInner">
+             <div class="wellLabel">${cell.label}</div>
+             <div class="smallLabel">${escapeHtml(cell.labelText || '')}</div>
+           </div>`
+        : `<div class="cellInner"><div class="wellLabel">${cell.label}</div></div>`;
+
+      div.addEventListener('pointerdown', (ev) => onCellPointerDown(ev, cell));
+      div.addEventListener('pointerenter', (ev) => onCellPointerEnter(ev, cell));
+      div.addEventListener('pointerup', () => { dragSelecting = false; });
+      div.addEventListener('pointercancel', () => { dragSelecting = false; });
+
+      grid.appendChild(div);
+    }
+  }
+
+  document.addEventListener('pointerup', () => { dragSelecting = false; });
+  document.addEventListener('pointercancel', () => { dragSelecting = false; });
+
+  function onCellPointerDown(ev, cell){
+    if (!CURRENT_BOXUID) return;
+
+    if (MOVE_MODE) return onCellMove(cell);
+    if (DELETE_MODE) return onCellSelect(cell);
+
+    // place on empty
+    if (!cell.occupied) return onCellPlace(cell);
+
+    // default: allow drag-select too
+    ev.preventDefault();
+    dragSelecting = true;
+    const already = selectedWells.has(cell.label);
+    dragAction = already ? 'remove' : 'add';
+    applySelection_(cell.label, dragAction);
+    paintHeader();
+    renderGrid(CURRENT_CELLS);
+  }
+
+  function onCellPointerEnter(ev, cell){
+    if (!dragSelecting) return;
+    if (!cell.occupied) return;
+    applySelection_(cell.label, dragAction);
+    paintHeader();
+    renderGrid(CURRENT_CELLS);
+  }
+
+  function onCellSelect(cell){
+    if (!cell.occupied) return;
+    const already = selectedWells.has(cell.label);
+    if (already) selectedWells.delete(cell.label); else selectedWells.add(cell.label);
+    paintHeader();
+    renderGrid(CURRENT_CELLS);
+  }
+
+  function applySelection_(label, action){
+    if (action === 'add') selectedWells.add(label);
+    else selectedWells.delete(label);
+  }
+
+  function onCellPlace(cell){
+    const itemKey = document.getElementById('itemSelect').value;
+    if (!itemKey){ alert('No unplaced item selected.'); return; }
+
+    setStatus(`Placing → ${cell.label}...`);
+    google.script.run
+      .withSuccessHandler(() => { setStatus(''); refreshAll(); })
+      .withFailureHandler(err => { setStatus('Error: ' + (err?.message || err)); refreshAll(); })
+      .apiPlaceItem(CURRENT_BOXUID, itemKey, cell.label);
+  }
+
+  function onCellMove(cell){
+    if (!moveSource){
+      if (!cell.occupied) return;
+      moveSource = cell.label;
+      setStatus(`Move source: ${moveSource}. Click empty target.`);
+      return;
+    } else {
+      if (cell.occupied) return;
+      const from = moveSource;
+      const to = cell.label;
+      moveSource = null;
+
+      setStatus(`Moving ${from} → ${to}...`);
+      google.script.run
+        .withSuccessHandler(() => { setStatus(''); refreshAll(); })
+        .withFailureHandler(err => { setStatus('Error: ' + (err?.message || err)); refreshAll(); })
+        .apiMoveItem(CURRENT_BOXUID, from, to);
+    }
+  }
+
+  function deleteSelected(){
+    if (selectedWells.size === 0) { alert('No wells selected.'); return; }
+    if (!confirm(`DELETE ${selectedWells.size} cell line record(s)? This deletes entire rows.`)) return;
+
+    const positions = Array.from(selectedWells);
+    setStatus(`Deleting ${positions.length}...`);
+    google.script.run
+      .withSuccessHandler(res => { setStatus(`Deleted ${res.deleted} row(s).`); selectedWells.clear(); refreshAll(); })
+      .withFailureHandler(err => { setStatus('Error: ' + (err?.message || err)); refreshAll(); })
+      .apiDeleteRowsByPositions(CURRENT_BOXUID, positions);
+  }
+
+  function escapeHtml(s){
+    return String(s).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m]));
+  }
+
+  function startAutoRefreshOnce_(){
+    if (autoRefreshTimer) return;
+    autoRefreshTimer = setInterval(() => {
+      if (MODE !== 'grid') return;
+      if (!CURRENT_BOXUID) return;
+      if (MOVE_MODE || dragSelecting) return;
+      refreshAll();
+    }, 2000);
+  }
+
+  function init(){
+    paintHeader();
+    setStatus('Loading boxes...');
+    google.script.run
+      .withSuccessHandler(list => {
+        BOX_LIST = list || [];
+        populateBoxDropdown();
+
+        if (!BOX_LIST.find(x => x.boxUid === CURRENT_BOXUID)) {
+          CURRENT_BOXUID = '';
+          CURRENT_BOXID_LABEL = '';
+          CURRENT_BOXTYPE = '';
+        } else {
+          const found = BOX_LIST.find(x => x.boxUid === CURRENT_BOXUID);
+          CURRENT_BOXID_LABEL = found?.boxId || '';
+          CURRENT_BOXTYPE = found?.boxType || '';
+        }
+
+        setStatus('');
+        refreshAll();
+        startAutoRefreshOnce_();
+      })
+      .withFailureHandler(err => setStatus('Error: ' + (err?.message || err)))
+      .apiListBoxes();
+  }
+
+  init();
+</script>
+</body>
+</html>
