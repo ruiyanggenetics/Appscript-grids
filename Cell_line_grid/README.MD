@@ -10,7 +10,7 @@ This project renders a 9x9 (or 8x12) box grid, lets allowed users **place**, **m
 
 ### Google Sheet
 Spreadsheet:
-- `1soWIXL1usgLSI5YyHnw8gDvxf9i45PgAcbwTQFijc0I`
+- `your spreadsheet link of interest`
 
 Required sheets + columns:
 
