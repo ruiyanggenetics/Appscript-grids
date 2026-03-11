@@ -23,7 +23,7 @@
 
 /************ CONFIG ************/
 const CONFIG = {
-  SPREADSHEET_ID: '1soWIXL1usgLSI5YyHnw8gDvxf9i45PgAcbwTQFijc0I', // fallback
+  SPREADSHEET_ID: 'xxxxxxxxxxxx', // fallback
 
   BOXES_SHEET: 'BOXES',
   GLYCEROL_SHEET: 'PLASMID_GLYCEROL',
