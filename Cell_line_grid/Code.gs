@@ -23,7 +23,7 @@
  *********************************/
 
 const CONFIG = {
-  SPREADSHEET_ID_FALLBACK: '1soWIXL1usgLSI5YyHnw8gDvxf9i45PgAcbwTQFijc0I', // <-- your file id
+  SPREADSHEET_ID_FALLBACK: 'XXXXXXXXXXXXX', // <-- your file id
 
   BOXES_SHEET: 'BOXES',
   CELL_LINE_SHEET: 'CELL_LINE',
