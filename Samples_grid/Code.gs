@@ -67,6 +67,21 @@ const CONFIG = {
 
 const USED_UP = 'Used-up';
 
+/************ SPREADSHEET ACCESS (webapp-safe) ************/
+const SPREADSHEET_ID = '1soWIXL1usgLSI5YyHnw8gDvxf9i45PgAcbwTQFijc0I';
+
+function getSS_() {
+  return SpreadsheetApp.openById(SPREADSHEET_ID);
+}
+
+function readSheet_(name) {
+  const ss = getSS_();
+  const sh = ss.getSheetByName(name);
+  if (!sh) throw new Error(`Sheet not found: ${name}`);
+  const values = sh.getDataRange().getValues();
+  return { sh, header: values[0] || [], values };
+}
+
 /************ COMPAT WRAPPERS ************/
 function openGridDialogForSelectedRow() { openGridForSelectedRow(); }
 function openGridDialogForSelectedRowDetails() { openGridForSelectedRow(); }
@@ -109,27 +124,6 @@ function assertAllowedUser_(opName) {
 function assertAllowedUserForReadIfEnabled_() {
   if (!CONFIG.REQUIRE_ALLOWLIST_FOR_READ) return;
   assertAllowedUser_('read');
-}
-
-/************ SPREADSHEET ACCESS ************/
-function setSpreadsheetId_() {
-  const id = SpreadsheetApp.getActiveSpreadsheet().getId();
-  PropertiesService.getScriptProperties().setProperty('SPREADSHEET_ID', id);
-}
-function getSS_() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  if (ss) return ss;
-
-  const id = PropertiesService.getScriptProperties().getProperty('SPREADSHEET_ID');
-  if (!id) throw new Error('SPREADSHEET_ID not set. Run setSpreadsheetId_() once from the script editor.');
-  return SpreadsheetApp.openById(id);
-}
-function readSheet_(name) {
-  const ss = getSS_();
-  const sh = ss.getSheetByName(name);
-  if (!sh) throw new Error(`Sheet not found: ${name}`);
-  const values = sh.getDataRange().getValues();
-  return { sh, header: values[0] || [], values };
 }
 
 /************ MENU (Sheets UI) ************/
