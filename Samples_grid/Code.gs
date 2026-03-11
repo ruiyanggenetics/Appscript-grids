@@ -68,7 +68,7 @@ const CONFIG = {
 const USED_UP = 'Used-up';
 
 /************ SPREADSHEET ACCESS (webapp-safe) ************/
-const SPREADSHEET_ID = '1soWIXL1usgLSI5YyHnw8gDvxf9i45PgAcbwTQFijc0I';
+const SPREADSHEET_ID = 'XXXXXXXXXXX';
 
 function getSS_() {
   return SpreadsheetApp.openById(SPREADSHEET_ID);
